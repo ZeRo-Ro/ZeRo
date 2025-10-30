@@ -1,0 +1,1322 @@
+-- ZeRo UI with AIM / ESP / MOVE (Fly + Debug Camera + NoClip + Speed) + NoWalls
+-- Place as LocalScript in StarterPlayerScripts
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CollectionService = game:GetService("CollectionService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local camera = workspace.CurrentCamera
+
+-- State
+local VectorBotEnabled = false
+local NoWallsEnabled = false
+local FOVValue = 120 -- radius in pixels
+
+-- Color options
+local ColorOptions = {
+    White = Color3.fromRGB(255, 255, 255),
+    Red = Color3.fromRGB(255, 50, 50),
+    Blue = Color3.fromRGB(50, 150, 255),
+    Green = Color3.fromRGB(50, 255, 50),
+    Yellow = Color3.fromRGB(255, 255, 50),
+    Purple = Color3.fromRGB(180, 70, 255),
+    Cyan = Color3.fromRGB(50, 255, 255),
+    ZeRo = "ZERO",
+    Rainbow = "RAINBOW"
+}
+
+local currentAimColor = ColorOptions.Red
+local currentESPColor = ColorOptions.Red
+local rainbowEnabled = false
+local zeroColorEnabled = false
+
+local NickNamesEnabled = false
+local ESPHighlightEnabled = false
+local espMap = {} -- model -> billboard gui
+local highlightMap = {} -- model -> Highlight
+
+local FlyEnabled = false
+local DebugCamEnabled = false
+local NoClipEnabled = false
+local SpeedEnabled = false
+
+-- Speed settings
+local FlySpeed = 50
+local DebugCamSpeed = 20
+local NoclipSpeed = 30
+local SpeedValue = 30
+
+-- Fly settings
+local FlyKeys = {
+    Forward = Enum.KeyCode.W,
+    Backward = Enum.KeyCode.S,
+    Left = Enum.KeyCode.A,
+    Right = Enum.KeyCode.D,
+    Up = Enum.KeyCode.Space,
+    Down = Enum.KeyCode.LeftShift
+}
+
+-- Keep original walkspeed for restore
+local originalWalkSpeed = nil
+
+-- Helper: create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ZeRo_UI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Black-Red color scheme
+local COLORS = {
+    Background = Color3.fromRGB(10, 10, 10),
+    Header = Color3.fromRGB(15, 15, 15),
+    Accent = Color3.fromRGB(255, 0, 0),
+    Text = Color3.fromRGB(255, 255, 255),
+    SubText = Color3.fromRGB(200, 200, 200),
+    Button = Color3.fromRGB(20, 20, 20),
+    ButtonHover = Color3.fromRGB(30, 30, 30),
+    ToggleOff = Color3.fromRGB(40, 40, 40),
+    ToggleOn = Color3.fromRGB(255, 0, 0)
+}
+
+-- Helper style function with black-red gradient
+local function styleFrame(frame, cornerRadius)
+    frame.BackgroundColor3 = COLORS.Background
+    frame.BorderSizePixel = 0
+    local corner = Instance.new("UICorner", frame)
+    corner.CornerRadius = UDim.new(0, cornerRadius or 6)
+    
+    -- Add black-red gradient
+    local gradient = Instance.new("UIGradient", frame)
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(15, 15, 15)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 0, 0))
+    })
+    gradient.Rotation = 90
+    
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Color3.fromRGB(80, 0, 0)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.3
+end
+
+-- Main window
+local main = Instance.new("Frame", screenGui)
+main.Name = "MainWindow"
+main.Size = UDim2.new(0, 400, 0, 530)
+main.Position = UDim2.new(0.5, -200, 0.5, -265)
+main.AnchorPoint = Vector2.new(0.5, 0.5)
+styleFrame(main, 8)
+
+-- Fade-in
+main.BackgroundTransparency = 1
+TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {BackgroundTransparency = 0}):Play()
+
+-- Titlebar with black-red gradient
+local titlebar = Instance.new("Frame", main)
+titlebar.Size = UDim2.new(1, 0, 0, 40)
+titlebar.Position = UDim2.new(0, 0, 0, 0)
+titlebar.BackgroundColor3 = COLORS.Header
+titlebar.BorderSizePixel = 0
+Instance.new("UICorner", titlebar).CornerRadius = UDim.new(0, 8)
+
+-- Add gradient to titlebar
+local titleGradient = Instance.new("UIGradient", titlebar)
+titleGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 0, 0)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 0, 0))
+})
+titleGradient.Rotation = 90
+
+local title = Instance.new("TextLabel", titlebar)
+title.Text = "ZeRo"
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 20
+title.TextColor3 = COLORS.Accent
+title.BackgroundTransparency = 1
+title.Position = UDim2.new(0, 15, 0, 0)
+title.Size = UDim2.new(0.6, 0, 1, 0)
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local subtitle = Instance.new("TextLabel", titlebar)
+subtitle.Text = "AIM • ESP • MOVE • NOWALLS"
+subtitle.Font = Enum.Font.Gotham
+subtitle.TextSize = 12
+subtitle.TextColor3 = Color3.fromRGB(255, 100, 100)
+subtitle.BackgroundTransparency = 1
+subtitle.Position = UDim2.new(0, 15, 0, 22)
+subtitle.Size = UDim2.new(0.6, 0, 0, 16)
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Make window draggable via titlebar
+do
+    local dragging = false
+    local dragStart, startPos
+    titlebar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+end
+
+-- Scroll container
+local scrollContainer = Instance.new("Frame", main)
+scrollContainer.Size = UDim2.new(1, -20, 1, -60)
+scrollContainer.Position = UDim2.new(0, 10, 0, 50)
+scrollContainer.BackgroundTransparency = 1
+scrollContainer.ClipsDescendants = true
+
+-- Scrolling frame
+local scrollingFrame = Instance.new("ScrollingFrame", scrollContainer)
+scrollingFrame.Size = UDim2.new(1, 0, 1, 0)
+scrollingFrame.BackgroundTransparency = 1
+scrollingFrame.ScrollBarThickness = 4
+scrollingFrame.ScrollBarImageColor3 = COLORS.Accent
+scrollingFrame.ScrollBarImageTransparency = 0.7
+scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollingFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local UIList = Instance.new("UIListLayout", scrollingFrame)
+UIList.SortOrder = Enum.SortOrder.LayoutOrder
+UIList.Padding = UDim.new(0, 10)
+
+-- Helper to create section frame with label
+local function createSection(titleText)
+    local sect = Instance.new("Frame", scrollingFrame)
+    sect.Size = UDim2.new(1, 0, 0, 0)
+    sect.BackgroundTransparency = 1
+    sect.AutomaticSize = Enum.AutomaticSize.Y
+    
+    local header = Instance.new("Frame", sect)
+    header.Size = UDim2.new(1, 0, 0, 25)
+    header.Position = UDim2.new(0, 0, 0, 0)
+    header.BackgroundTransparency = 1
+    
+    local label = Instance.new("TextLabel", header)
+    label.Text = titleText
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 14
+    label.TextColor3 = COLORS.Text
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.Size = UDim2.new(0.4, 0, 1, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local line = Instance.new("Frame", header)
+    line.Size = UDim2.new(1, 0, 0, 1)
+    line.Position = UDim2.new(0, 0, 1, -1)
+    line.BackgroundColor3 = COLORS.Accent
+    line.BackgroundTransparency = 0.3
+    line.BorderSizePixel = 0
+    
+    local content = Instance.new("Frame", sect)
+    content.Size = UDim2.new(1, 0, 0, 0)
+    content.Position = UDim2.new(0, 0, 0, 30)
+    content.BackgroundTransparency = 1
+    content.AutomaticSize = Enum.AutomaticSize.Y
+    
+    local list = Instance.new("UIListLayout", content)
+    list.SortOrder = Enum.SortOrder.LayoutOrder
+    list.Padding = UDim.new(0, 5)
+    
+    return sect, content
+end
+
+-- Helper to create toggle button
+local function createToggle(parent, text, enabled)
+    local toggleFrame = Instance.new("Frame", parent)
+    toggleFrame.Size = UDim2.new(1, -10, 0, 30)
+    toggleFrame.BackgroundTransparency = 1
+    
+    local label = Instance.new("TextLabel", toggleFrame)
+    label.Text = text
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 13
+    label.TextColor3 = COLORS.SubText
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.Size = UDim2.new(0.7, 0, 1, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local toggleBtn = Instance.new("TextButton", toggleFrame)
+    toggleBtn.Position = UDim2.new(1, -35, 0.5, -10)
+    toggleBtn.Size = UDim2.new(0, 35, 0, 20)
+    toggleBtn.BackgroundColor3 = enabled and COLORS.ToggleOn or COLORS.ToggleOff
+    toggleBtn.AutoButtonColor = false
+    toggleBtn.BorderSizePixel = 0
+    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 10)
+    
+    -- Add gradient to toggle button when on
+    if enabled then
+        local toggleGradient = Instance.new("UIGradient", toggleBtn)
+        toggleGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 0)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+        })
+        toggleGradient.Rotation = 90
+    end
+    
+    local toggleKnob = Instance.new("Frame", toggleBtn)
+    toggleKnob.Size = UDim2.new(0, 16, 0, 16)
+    toggleKnob.Position = UDim2.new(0, enabled and 17 or 2, 0.5, -8)
+    toggleKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    toggleKnob.BorderSizePixel = 0
+    Instance.new("UICorner", toggleKnob).CornerRadius = UDim.new(1, 0)
+    
+    return toggleBtn, toggleKnob
+end
+
+-- Helper to create color picker
+local function createColorPicker(parent, text, currentColor, onColorChanged)
+    local colorFrame = Instance.new("Frame", parent)
+    colorFrame.Size = UDim2.new(1, -10, 0, 30)
+    colorFrame.BackgroundTransparency = 1
+    
+    local label = Instance.new("TextLabel", colorFrame)
+    label.Text = text
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 13
+    label.TextColor3 = COLORS.SubText
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.Size = UDim2.new(0.5, 0, 1, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local colorBtn = Instance.new("TextButton", colorFrame)
+    colorBtn.Position = UDim2.new(1, -35, 0.5, -10)
+    colorBtn.Size = UDim2.new(0, 35, 0, 20)
+    colorBtn.BackgroundColor3 = currentColor
+    colorBtn.AutoButtonColor = false
+    colorBtn.BorderSizePixel = 0
+    Instance.new("UICorner", colorBtn).CornerRadius = UDim.new(0, 4)
+    
+    local colorMenu = Instance.new("Frame", parent)
+    colorMenu.Size = UDim2.new(1, -10, 0, 40)
+    colorMenu.Position = UDim2.new(0, 5, 1, 5)
+    colorMenu.BackgroundColor3 = COLORS.Button
+    colorMenu.Visible = false
+    colorMenu.BorderSizePixel = 0
+    Instance.new("UICorner", colorMenu).CornerRadius = UDim.new(0, 6)
+    
+    -- Add gradient to color menu
+    local menuGradient = Instance.new("UIGradient", colorMenu)
+    menuGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(15, 15, 15)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 0, 0))
+    })
+    menuGradient.Rotation = 90
+    
+    local colorGrid = Instance.new("UIGridLayout", colorMenu)
+    colorGrid.CellSize = UDim2.new(0, 30, 0, 30)
+    colorGrid.CellPadding = UDim2.new(0, 5, 0, 5)
+    colorGrid.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    colorGrid.VerticalAlignment = Enum.VerticalAlignment.Center
+    
+    -- Create color buttons
+    for name, color in pairs(ColorOptions) do
+        local colorOption = Instance.new("TextButton", colorMenu)
+        colorOption.Size = UDim2.new(0, 30, 0, 30)
+        
+        if name == "Rainbow" then
+            colorOption.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            local rainbowLabel = Instance.new("TextLabel", colorOption)
+            rainbowLabel.Size = UDim2.new(1, 0, 1, 0)
+            rainbowLabel.BackgroundTransparency = 1
+            rainbowLabel.Text = "R"
+            rainbowLabel.Font = Enum.Font.GothamBold
+            rainbowLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+            rainbowLabel.TextSize = 14
+        elseif name == "ZeRo" then
+            -- Create ZeRo gradient color
+            local zeroGradient = Instance.new("UIGradient", colorOption)
+            zeroGradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 0, 0)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+            })
+            zeroGradient.Rotation = 45
+            
+            local zeroLabel = Instance.new("TextLabel", colorOption)
+            zeroLabel.Size = UDim2.new(1, 0, 1, 0)
+            zeroLabel.BackgroundTransparency = 1
+            zeroLabel.Text = "Z"
+            zeroLabel.Font = Enum.Font.GothamBlack
+            zeroLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+            zeroLabel.TextSize = 14
+        else
+            colorOption.BackgroundColor3 = color
+        end
+        
+        colorOption.AutoButtonColor = false
+        colorOption.BorderSizePixel = 0
+        Instance.new("UICorner", colorOption).CornerRadius = UDim.new(0, 4)
+        
+        colorOption.MouseButton1Click:Connect(function()
+            onColorChanged(name, color)
+            colorMenu.Visible = false
+            
+            if name == "ZeRo" then
+                -- For ZeRo color, show gradient on button
+                colorBtn.BackgroundColor3 = Color3.fromRGB(128, 0, 0)
+                local btnGradient = Instance.new("UIGradient", colorBtn)
+                btnGradient.Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 0, 0)),
+                    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+                })
+                btnGradient.Rotation = 45
+            elseif name == "Rainbow" then
+                colorBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                -- Remove any existing gradient
+                for _, child in ipairs(colorBtn:GetChildren()) do
+                    if child:IsA("UIGradient") then
+                        child:Destroy()
+                    end
+                end
+            else
+                colorBtn.BackgroundColor3 = color
+                -- Remove any existing gradient
+                for _, child in ipairs(colorBtn:GetChildren()) do
+                    if child:IsA("UIGradient") then
+                        child:Destroy()
+                    end
+                end
+            end
+        end)
+    end
+    
+    colorBtn.MouseButton1Click:Connect(function()
+        colorMenu.Visible = not colorMenu.Visible
+    end)
+    
+    return colorBtn, colorMenu
+end
+
+-- Helper to create slider
+local function createSlider(parent, text, minValue, maxValue, currentValue, onValueChanged)
+    local sliderFrame = Instance.new("Frame", parent)
+    sliderFrame.Size = UDim2.new(1, -10, 0, 50)
+    sliderFrame.BackgroundTransparency = 1
+    
+    local label = Instance.new("TextLabel", sliderFrame)
+    label.Text = text
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 13
+    label.TextColor3 = COLORS.SubText
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.Size = UDim2.new(0.5, 0, 0, 20)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local valueLabel = Instance.new("TextLabel", sliderFrame)
+    valueLabel.Text = tostring(currentValue)
+    valueLabel.Font = Enum.Font.GothamBold
+    valueLabel.TextSize = 13
+    valueLabel.TextColor3 = COLORS.Accent
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Position = UDim2.new(1, -40, 0, 0)
+    valueLabel.Size = UDim2.new(0, 35, 0, 20)
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+    
+    local slider = Instance.new("TextButton", sliderFrame)
+    slider.Size = UDim2.new(1, -10, 0, 8)
+    slider.Position = UDim2.new(0, 5, 1, -25)
+    slider.BackgroundColor3 = COLORS.ToggleOff
+    slider.AutoButtonColor = false
+    slider.BorderSizePixel = 0
+    Instance.new("UICorner", slider).CornerRadius = UDim.new(0, 4)
+    
+    -- Add gradient to slider background
+    local sliderGradient = Instance.new("UIGradient", slider)
+    sliderGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(50, 0, 0))
+    })
+    
+    local fill = Instance.new("Frame", slider)
+    fill.Size = UDim2.new((currentValue - minValue) / (maxValue - minValue), 0, 1, 0)
+    fill.BackgroundColor3 = COLORS.Accent
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+    
+    -- Add gradient to fill
+    local fillGradient = Instance.new("UIGradient", fill)
+    fillGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(200, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+    })
+    fillGradient.Rotation = 0
+    
+    -- Slider logic
+    local dragging = false
+    slider.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then 
+            dragging = true 
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local relX = math.clamp((input.Position.X - slider.AbsolutePosition.X) / slider.AbsoluteSize.X, 0, 1)
+            fill.Size = UDim2.new(relX, 0, 1, 0)
+            local newValue = math.floor(minValue + relX * (maxValue - minValue))
+            valueLabel.Text = tostring(newValue)
+            onValueChanged(newValue)
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then 
+            dragging = false 
+        end
+    end)
+    
+    return sliderFrame
+end
+
+-- AIM section
+local aimSection, aimContent = createSection("AIMBOT")
+
+local vecToggle, vecKnob = createToggle(aimContent, "VectorBot", VectorBotEnabled)
+local nowallsToggle, nowallsKnob = createToggle(aimContent, "NoWalls", NoWallsEnabled)
+
+-- FOV slider
+createSlider(aimContent, "FOV Radius", 10, 400, FOVValue, function(value)
+    FOVValue = value
+end)
+
+-- Aim color picker
+local aimColorBtn, aimColorMenu = createColorPicker(aimContent, "Aim Circle Color", currentAimColor, function(name, color)
+    if name == "Rainbow" then
+        rainbowEnabled = true
+        zeroColorEnabled = false
+    elseif name == "ZeRo" then
+        zeroColorEnabled = true
+        rainbowEnabled = false
+    else
+        rainbowEnabled = false
+        zeroColorEnabled = false
+        currentAimColor = color
+    end
+end)
+
+-- VISUALS section
+local visualsSection, visualsContent = createSection("VISUALS")
+
+local nickToggle, nickKnob = createToggle(visualsContent, "Player ESP", NickNamesEnabled)
+local highlightToggle, highlightKnob = createToggle(visualsContent, "Highlights", ESPHighlightEnabled)
+
+-- ESP color picker
+local espColorBtn, espColorMenu = createColorPicker(visualsContent, "ESP Color", currentESPColor, function(name, color)
+    if name == "Rainbow" then
+        currentESPColor = Color3.fromRGB(255, 255, 255)
+    elseif name == "ZeRo" then
+        currentESPColor = Color3.fromRGB(128, 0, 0)
+    else
+        currentESPColor = color
+    end
+    updateESPColors()
+end)
+
+-- MOVEMENT section
+local moveSection, moveContent = createSection("MOVEMENT")
+
+local flyToggle, flyKnob = createToggle(moveContent, "Fly", FlyEnabled)
+local noclipToggle, noclipKnob = createToggle(moveContent, "NoClip", NoClipEnabled)
+local speedToggle, speedKnob = createToggle(moveContent, "Speed", SpeedEnabled)
+local debugToggle, debugKnob = createToggle(moveContent, "Debug Camera", DebugCamEnabled)
+
+-- Speed sliders
+createSlider(moveContent, "Fly Speed", 10, 100, FlySpeed, function(value)
+    FlySpeed = value
+end)
+
+createSlider(moveContent, "NoClip Speed", 10, 100, NoclipSpeed, function(value)
+    NoclipSpeed = value
+end)
+
+createSlider(moveContent, "Speed Value", 16, 100, SpeedValue, function(value)
+    SpeedValue = value
+    if SpeedEnabled then
+        setSpeed(SpeedEnabled)
+    end
+end)
+
+createSlider(moveContent, "Debug Cam Speed", 5, 50, DebugCamSpeed, function(value)
+    DebugCamSpeed = value
+end)
+
+-- Aim circle UI (center)
+local aimGui = Instance.new("ScreenGui", playerGui)
+aimGui.Name = "AimCircleGui_ZeRo"
+aimGui.ResetOnSpawn = false
+
+local circle = Instance.new("Frame", aimGui)
+circle.AnchorPoint = Vector2.new(0.5, 0.5)
+circle.Position = UDim2.new(0.5, 0, 0.5, 0)
+circle.Size = UDim2.new(0, math.max(4, FOVValue*2), 0, math.max(4, FOVValue*2))
+circle.BackgroundTransparency = 1
+Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
+
+local circleStroke = Instance.new("UIStroke", circle)
+circleStroke.Thickness = 2
+circleStroke.Color = currentAimColor
+circleStroke.Transparency = 0.7
+
+-- Toggle animations
+local function animateToggle(toggleBtn, toggleKnob, enabled)
+    if enabled then
+        -- Add gradient when turning on
+        for _, child in ipairs(toggleBtn:GetChildren()) do
+            if child:IsA("UIGradient") then
+                child:Destroy()
+            end
+        end
+        local toggleGradient = Instance.new("UIGradient", toggleBtn)
+        toggleGradient.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 0)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0))
+        })
+        toggleGradient.Rotation = 90
+    else
+        -- Remove gradient when turning off
+        for _, child in ipairs(toggleBtn:GetChildren()) do
+            if child:IsA("UIGradient") then
+                child:Destroy()
+            end
+        end
+        toggleBtn.BackgroundColor3 = COLORS.ToggleOff
+    end
+    
+    TweenService:Create(toggleBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+        BackgroundColor3 = enabled and COLORS.ToggleOn or COLORS.ToggleOff
+    }):Play()
+    
+    TweenService:Create(toggleKnob, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+        Position = UDim2.new(0, enabled and 17 or 2, 0.5, -8)
+    }):Play()
+end
+
+-- UI interactions
+vecToggle.MouseButton1Click:Connect(function()
+    VectorBotEnabled = not VectorBotEnabled
+    animateToggle(vecToggle, vecKnob, VectorBotEnabled)
+end)
+
+nowallsToggle.MouseButton1Click:Connect(function()
+    NoWallsEnabled = not NoWallsEnabled
+    animateToggle(nowallsToggle, nowallsKnob, NoWallsEnabled)
+end)
+
+nickToggle.MouseButton1Click:Connect(function()
+    NickNamesEnabled = not NickNamesEnabled
+    animateToggle(nickToggle, nickKnob, NickNamesEnabled)
+    if NickNamesEnabled then
+        createAllESP()
+    else
+        removeAllESP()
+    end
+end)
+
+highlightToggle.MouseButton1Click:Connect(function()
+    ESPHighlightEnabled = not ESPHighlightEnabled
+    animateToggle(highlightToggle, highlightKnob, ESPHighlightEnabled)
+    if ESPHighlightEnabled then
+        createAllHighlights()
+    else
+        removeAllHighlights()
+    end
+end)
+
+flyToggle.MouseButton1Click:Connect(function()
+    FlyEnabled = not FlyEnabled
+    animateToggle(flyToggle, flyKnob, FlyEnabled)
+    setFly(FlyEnabled)
+end)
+
+noclipToggle.MouseButton1Click:Connect(function()
+    NoClipEnabled = not NoClipEnabled
+    animateToggle(noclipToggle, noclipKnob, NoClipEnabled)
+    setNoClip(NoClipEnabled)
+end)
+
+speedToggle.MouseButton1Click:Connect(function()
+    SpeedEnabled = not SpeedEnabled
+    animateToggle(speedToggle, speedKnob, SpeedEnabled)
+    setSpeed(SpeedEnabled)
+end)
+
+debugToggle.MouseButton1Click:Connect(function()
+    DebugCamEnabled = not DebugCamEnabled
+    animateToggle(debugToggle, debugKnob, DebugCamEnabled)
+    setDebugCamera(DebugCamEnabled)
+end)
+
+-- ESP implementation: BillboardGui for names
+function createAllESP()
+    removeAllESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            createESPForModel(player.Character)
+        end
+    end
+end
+
+function createESPForModel(model)
+    if espMap[model] then return end
+    local head = model:FindFirstChild("Head")
+    if not head then return end
+    
+    local bill = Instance.new("BillboardGui")
+    bill.Name = "ZeRo_ESP"
+    bill.Adornee = head
+    bill.Size = UDim2.new(0, 200, 0, 50)
+    bill.AlwaysOnTop = true
+    bill.MaxDistance = 2000
+    bill.Parent = playerGui
+    
+    local frame = Instance.new("Frame", bill)
+    frame.Size = UDim2.new(1, 0, 1, 0)
+    frame.BackgroundTransparency = 0.8
+    frame.BackgroundColor3 = COLORS.Background
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 4)
+    
+    -- Add gradient to ESP frame
+    local espGradient = Instance.new("UIGradient", frame)
+    espGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 0, 0))
+    })
+    espGradient.Rotation = 90
+    
+    local nameLabel = Instance.new("TextLabel", frame)
+    nameLabel.Size = UDim2.new(1, -8, 0.5, 0)
+    nameLabel.Position = UDim2.new(0, 4, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = model.Name
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 14
+    nameLabel.TextColor3 = currentESPColor
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local distanceLabel = Instance.new("TextLabel", frame)
+    distanceLabel.Size = UDim2.new(1, -8, 0.5, 0)
+    distanceLabel.Position = UDim2.new(0, 4, 0.5, 0)
+    distanceLabel.BackgroundTransparency = 1
+    distanceLabel.Font = Enum.Font.Gotham
+    distanceLabel.TextSize = 12
+    distanceLabel.TextColor3 = currentESPColor
+    distanceLabel.TextXAlignment = Enum.TextXAlignment.Left
+    
+    espMap[model] = {
+        Billboard = bill,
+        NameLabel = nameLabel,
+        DistanceLabel = distanceLabel
+    }
+    
+    -- Update distance
+    coroutine.wrap(function()
+        while bill and bill.Parent and espMap[model] do
+            task.wait(0.1)
+            if model.Parent and head.Parent then
+                local distance = (head.Position - camera.CFrame.Position).Magnitude
+                distanceLabel.Text = string.format("%.1f studs", distance)
+            else
+                break
+            end
+        end
+    end)()
+end
+
+function removeAllESP()
+    for model, espData in pairs(espMap) do
+        if espData.Billboard and espData.Billboard.Parent then 
+            espData.Billboard:Destroy() 
+        end
+        espMap[model] = nil
+    end
+end
+
+function updateESPColors()
+    for model, espData in pairs(espMap) do
+        if espData.NameLabel then
+            espData.NameLabel.TextColor3 = currentESPColor
+        end
+        if espData.DistanceLabel then
+            espData.DistanceLabel.TextColor3 = currentESPColor
+        end
+    end
+end
+
+-- Highlights using Highlight instance
+function createAllHighlights()
+    removeAllHighlights()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            createHighlightForModel(player.Character)
+        end
+    end
+end
+
+function createHighlightForModel(model)
+    if highlightMap[model] then return end
+    local hl = Instance.new("Highlight")
+    hl.Adornee = model
+    hl.FillTransparency = 0.9
+    hl.OutlineTransparency = 0
+    hl.FillColor = currentESPColor
+    hl.OutlineColor = currentESPColor
+    hl.Parent = model
+    highlightMap[model] = hl
+end
+
+function removeAllHighlights()
+    for model, hl in pairs(highlightMap) do
+        if hl and hl.Parent then 
+            hl:Destroy() 
+        end
+        highlightMap[model] = nil
+    end
+end
+
+-- Keep ESP/Highlight in sync when characters appear/disappear
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(character)
+        if NickNamesEnabled then 
+            task.wait(0.5)
+            createESPForModel(character) 
+        end
+        if ESPHighlightEnabled then 
+            task.wait(0.5)
+            createHighlightForModel(character) 
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    if player.Character and espMap[player.Character] then
+        if espMap[player.Character].Billboard and espMap[player.Character].Billboard.Parent then 
+            espMap[player.Character].Billboard:Destroy() 
+        end
+        espMap[player.Character] = nil
+    end
+    if player.Character and highlightMap[player.Character] then
+        if highlightMap[player.Character].Parent then 
+            highlightMap[player.Character]:Destroy() 
+        end
+        highlightMap[player.Character] = nil
+    end
+end)
+
+-- Initialize ESP for existing players
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= Players.LocalPlayer and player.Character then
+        if NickNamesEnabled then createESPForModel(player.Character) end
+        if ESPHighlightEnabled then createHighlightForModel(player.Character) end
+    end
+    player.CharacterAdded:Connect(function(character)
+        task.wait(0.5)
+        if NickNamesEnabled then createESPForModel(character) end
+        if ESPHighlightEnabled then createHighlightForModel(character) end
+    end)
+end
+
+-- Aim logic: find closest head within FOV
+local function getClosestTargetInCircle()
+    local closest = nil
+    local shortest = math.huge
+    local vpCenterX, vpCenterY = camera.ViewportSize.X/2, camera.ViewportSize.Y/2
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            local head = player.Character:FindFirstChild("Head")
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            
+            if head and humanoid and humanoid.Health > 0 then
+                local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local dx = screenPos.X - vpCenterX
+                    local dy = screenPos.Y - vpCenterY
+                    local dist = math.sqrt(dx*dx + dy*dy)
+                    
+                    if dist <= FOVValue and dist < shortest then
+                        shortest = dist
+                        closest = player.Character
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- NoWalls function: teleport behind target and attack
+local function executeNoWalls(target)
+    if not target or not target:FindFirstChild("HumanoidRootPart") then return end
+    
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    
+    local targetRoot = target.HumanoidRootPart
+    local myRoot = character.HumanoidRootPart
+    
+    -- Save original position
+    local originalPosition = myRoot.Position
+    local originalCFrame = myRoot.CFrame
+    
+    -- Calculate position behind target (2-3 studs behind)
+    local behindOffset = -targetRoot.CFrame.LookVector * 3
+    local teleportPosition = targetRoot.Position + behindOffset + Vector3.new(0, 2, 0)
+    
+    -- Look at target
+    local lookAtCFrame = CFrame.new(teleportPosition, targetRoot.Position)
+    
+    -- Teleport behind target
+    myRoot.CFrame = lookAtCFrame
+    
+    -- Simulate mouse click (attack)
+    if character:FindFirstChildOfClass("Tool") then
+        -- If player has a tool, activate it
+        local tool = character:FindFirstChildOfClass("Tool")
+        if tool and tool:FindFirstChild("Handle") then
+            tool:Activate()
+        end
+    end
+    
+    -- Wait a tiny moment for the attack to register
+    wait(0.05)
+    
+    -- Teleport back to original position
+    myRoot.CFrame = originalCFrame
+end
+
+-- LMB aiming instant to head when VectorBot is enabled, or NoWalls when enabled
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        local target = getClosestTargetInCircle()
+        
+        if target then
+            if NoWallsEnabled and not DebugCamEnabled then
+                -- Execute NoWalls teleport and attack
+                executeNoWalls(target)
+            elseif VectorBotEnabled and not DebugCamEnabled then
+                -- Standard VectorBot aiming
+                if target:FindFirstChild("Head") then
+                    camera.CFrame = CFrame.new(camera.CFrame.Position, target.Head.Position)
+                end
+            elseif (VectorBotEnabled or NoWallsEnabled) and DebugCamEnabled then
+                -- Debug camera look at target
+                if target:FindFirstChild("Head") then
+                    debugCameraLookAt(target.Head.Position)
+                end
+            end
+        end
+    end
+end)
+
+-- Circle update + rainbow color + ZeRo color
+do
+    local hue = 0
+    local espHue = 0
+    local zeroHue = 0
+    RunService.RenderStepped:Connect(function(dt)
+        -- Update circle size and color
+        circle.Size = UDim2.new(0, math.max(6, FOVValue*2), 0, math.max(6, FOVValue*2))
+        
+        if rainbowEnabled then
+            hue = (hue + dt * 0.8) % 1
+            circleStroke.Color = Color3.fromHSV(hue, 1, 1)
+        elseif zeroColorEnabled then
+            zeroHue = (zeroHue + dt * 2) % 1
+            -- Black to red gradient effect
+            local intensity = math.sin(zeroHue * math.pi) * 0.5 + 0.5
+            circleStroke.Color = Color3.new(intensity, 0, 0)
+        else
+            circleStroke.Color = currentAimColor
+        end
+        
+        -- Update ESP colors if rainbow
+        if currentESPColor == Color3.fromRGB(255, 255, 255) then -- Rainbow mode for ESP
+            espHue = (espHue + dt * 0.6) % 1
+            local rainbowESPColor = Color3.fromHSV(espHue, 1, 1)
+            
+            for model, espData in pairs(espMap) do
+                if espData.NameLabel then
+                    espData.NameLabel.TextColor3 = rainbowESPColor
+                end
+                if espData.DistanceLabel then
+                    espData.DistanceLabel.TextColor3 = rainbowESPColor
+                end
+            end
+            
+            for model, hl in pairs(highlightMap) do
+                if hl then
+                    hl.FillColor = rainbowESPColor
+                    hl.OutlineColor = rainbowESPColor
+                end
+            end
+        end
+    end)
+end
+
+-- ========== FLY implementation ==========
+local flyBodyVelocity, flyBodyGyro
+local flyConnection
+
+local function stopFly()
+    if flyBodyVelocity then
+        flyBodyVelocity:Destroy()
+        flyBodyVelocity = nil
+    end
+    if flyBodyGyro then
+        flyBodyGyro:Destroy()
+        flyBodyGyro = nil
+    end
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+    
+    -- Restore character state
+    local character = player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.PlatformStand = false
+        end
+    end
+end
+
+local function startFly()
+    local character = player.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    
+    if not humanoid or not rootPart then return end
+    
+    -- Enable platform stand for flight
+    humanoid.PlatformStand = true
+    
+    -- Create BodyVelocity and BodyGyro
+    flyBodyVelocity = Instance.new("BodyVelocity")
+    flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    flyBodyVelocity.MaxForce = Vector3.new(40000, 40000, 40000)
+    flyBodyVelocity.P = 1250
+    flyBodyVelocity.Parent = rootPart
+    
+    flyBodyGyro = Instance.new("BodyGyro")
+    flyBodyGyro.MaxTorque = Vector3.new(40000, 40000, 40000)
+    flyBodyGyro.P = 3000
+    flyBodyGyro.Parent = rootPart
+    
+    -- Flight control loop
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if not flyBodyVelocity or not flyBodyGyro or not rootPart then
+            stopFly()
+            return
+        end
+        
+        -- Update gyro to match camera direction
+        flyBodyGyro.CFrame = camera.CFrame
+        
+        -- Calculate movement direction
+        local direction = Vector3.new(0, 0, 0)
+        
+        if UserInputService:IsKeyDown(FlyKeys.Forward) then
+            direction = direction + camera.CFrame.LookVector
+        end
+        if UserInputService:IsKeyDown(FlyKeys.Backward) then
+            direction = direction - camera.CFrame.LookVector
+        end
+        if UserInputService:IsKeyDown(FlyKeys.Left) then
+            direction = direction - camera.CFrame.RightVector
+        end
+        if UserInputService:IsKeyDown(FlyKeys.Right) then
+            direction = direction + camera.CFrame.RightVector
+        end
+        if UserInputService:IsKeyDown(FlyKeys.Up) then
+            direction = direction + Vector3.new(0, 1, 0)
+        end
+        if UserInputService:IsKeyDown(FlyKeys.Down) then
+            direction = direction - Vector3.new(0, 1, 0)
+        end
+        
+        -- Apply movement
+        if direction.Magnitude > 0 then
+            flyBodyVelocity.Velocity = direction.Unit * FlySpeed
+        else
+            flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+        end
+    end)
+end
+
+function setFly(enabled)
+    if enabled then
+        startFly()
+    else
+        stopFly()
+    end
+end
+
+-- ========== NOCLIP implementation ==========
+local noclipConnection = nil
+local noclipParts = {}
+
+local function stopNoClip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    
+    -- Restore collision
+    for part, canCollide in pairs(noclipParts) do
+        if part and part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+    noclipParts = {}
+end
+
+local function startNoClip()
+    stopNoClip()
+    
+    local character = player.Character
+    if not character then return end
+    
+    -- Store original collision states and disable collision
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            noclipParts[part] = part.CanCollide
+            part.CanCollide = false
+        end
+    end
+    
+    -- NoClip movement loop
+    noclipConnection = RunService.Heartbeat:Connect(function()
+        local character = player.Character
+        if not character then
+            stopNoClip()
+            return
+        end
+        
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        
+        -- Calculate movement direction
+        local direction = Vector3.new(0, 0, 0)
+        
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+            direction = direction + camera.CFrame.LookVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+            direction = direction - camera.CFrame.LookVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+            direction = direction - camera.CFrame.RightVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+            direction = direction + camera.CFrame.RightVector
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            direction = direction + Vector3.new(0, 1, 0)
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+            direction = direction - Vector3.new(0, 1, 0)
+        end
+        
+        -- Apply movement
+        if direction.Magnitude > 0 then
+            rootPart.Velocity = direction.Unit * NoclipSpeed
+        else
+            rootPart.Velocity = Vector3.new(0, 0, 0)
+        end
+        
+        -- Maintain no collision for new parts
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                noclipParts[part] = true
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+function setNoClip(enabled)
+    if enabled then
+        startNoClip()
+    else
+        stopNoClip()
+    end
+end
+
+-- ========== SPEED implementation ==========
+local originalWalkSpeed = 16
+
+local function setSpeed(enabled)
+    local character = player.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    
+    if enabled then
+        -- Store original walk speed
+        if originalWalkSpeed == nil then
+            originalWalkSpeed = humanoid.WalkSpeed
+        end
+        -- Set new speed
+        humanoid.WalkSpeed = SpeedValue
+    else
+        -- Restore original walk speed
+        if originalWalkSpeed then
+            humanoid.WalkSpeed = originalWalkSpeed
+        end
+    end
+end
+
+-- ========== Debug Camera ==========
+local debugCameraConnection = nil
+local debugCameraEnabled = false
+
+function debugCameraLookAt(position)
+    if debugCameraEnabled then
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, position)
+    end
+end
+
+function setDebugCamera(enabled)
+    if enabled then
+        debugCameraEnabled = true
+        camera.CameraType = Enum.CameraType.Scriptable
+        
+        local moveDirection = Vector3.new(0, 0, 0)
+        
+        debugCameraConnection = RunService.RenderStepped:Connect(function(delta)
+            if not debugCameraEnabled then return end
+            
+            -- Camera movement
+            moveDirection = Vector3.new(0, 0, 0)
+            
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                moveDirection = moveDirection + camera.CFrame.LookVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                moveDirection = moveDirection - camera.CFrame.LookVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                moveDirection = moveDirection - camera.CFrame.RightVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                moveDirection = moveDirection + camera.CFrame.RightVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                moveDirection = moveDirection + Vector3.new(0, 1, 0)
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+                moveDirection = moveDirection - Vector3.new(0, 1, 0)
+            end
+            
+            if moveDirection.Magnitude > 0 then
+                camera.CFrame = camera.CFrame + moveDirection.Unit * DebugCamSpeed * delta
+            end
+            
+            -- Mouse look
+            if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+                UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+            end
+        end)
+        
+    else
+        debugCameraEnabled = false
+        if debugCameraConnection then
+            debugCameraConnection:Disconnect()
+            debugCameraConnection = nil
+        end
+        camera.CameraType = Enum.CameraType.Custom
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    end
+end
+
+-- Clean up functions on character change
+player.CharacterAdded:Connect(function(character)
+    if FlyEnabled then
+        task.wait(1)
+        startFly()
+    end
+    if NoClipEnabled then
+        task.wait(1)
+        startNoClip()
+    end
+    if SpeedEnabled then
+        task.wait(1)
+        setSpeed(true)
+    end
+end)
+
+player.CharacterRemoving:Connect(function()
+    stopFly()
+    stopNoClip()
+end)
+
+-- ========== Utility & cleanup ==========
+-- Keyboard shortcuts
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.Insert then
+        main.Visible = not main.Visible
+    elseif input.KeyCode == Enum.KeyCode.G then
+        VectorBotEnabled = not VectorBotEnabled
+        animateToggle(vecToggle, vecKnob, VectorBotEnabled)
+    elseif input.KeyCode == Enum.KeyCode.H then
+        NoWallsEnabled = not NoWallsEnabled
+        animateToggle(nowallsToggle, nowallsKnob, NoWallsEnabled)
+    elseif input.KeyCode == Enum.KeyCode.End then
+        -- Emergency cleanup
+        stopFly()
+        stopNoClip()
+        setSpeed(false)
+        setDebugCamera(false)
+        screenGui:Destroy()
+        aimGui:Destroy()
+    end
+end)
+
+-- Auto-initialize for existing character
+if player.Character then
+    if FlyEnabled then
+        task.wait(1)
+        startFly()
+    end
+    if NoClipEnabled then
+        task.wait(1)
+        startNoClip()
+    end
+    if SpeedEnabled then
+        task.wait(1)
+        setSpeed(true)
+    end
+end
+
+-- Final print
+print("[ZeRo UI] Loaded successfully! Insert - Toggle Menu | G - Toggle AimBot | H - Toggle NoWalls | End - Emergency Exit")
+print("Features: AimBot, NoWalls, ESP, Fly, NoClip, Speed, Debug Camera")
+print("Color Scheme: Black-Red Gradient with ZeRo Color")
